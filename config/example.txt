@@ -1,0 +1,14 @@
+[credentials]
+# Account used to access hosts
+linux_username=ansible
+linux_password=secretpassword
+windows_username=
+windows_password=
+
+[hosts]
+# Add hosts by specifying hostname=ip
+# Prepend windows_ to all Windows hosts
+#windows_VM1=
+#windows_VM2=
+Centos7VM1=192.168.1.15
+#Centos7VM2=
