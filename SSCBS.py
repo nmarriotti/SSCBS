@@ -8,6 +8,7 @@
 #=============================================================================
 import paramiko, time
 import openpyxl, sys, os
+import re
 from subprocess import check_output
 
 
@@ -15,6 +16,13 @@ configurations = {}
 idx = ""
 saveLocation = os.path.join(os.getcwd(), "Excel Files")
 configfile = ""
+
+
+def atoi(text):
+    return int(text) if text.isdigit() else text
+
+def natural_keys(text):
+    return [ atoi(c) for c in re.split(r'(\d+)', text) ]
 
 
 # Only prints the banner
@@ -92,7 +100,8 @@ class Scanner:
                         pass
 
         # DEBUG - Print complete rolodex scanner will use for comparisons
-        #print(self.rolodex)
+        #print(self.rolodex["Centos7VM1"]["S"])
+        #sys.exit(1)
 
     def isLoaded(self):
         return self.loaded
@@ -100,6 +109,39 @@ class Scanner:
     def setHostnameAndBuild(self, hostname):
         self.hostname = hostname
         self.build()
+
+    
+    # Returns rolodex values stored at the specificed key
+    def getRolodexSection(self, key, d=None):
+        section = False
+        try:
+            if not d:
+                section = self.rolodex[self.hostname][key]
+            else:
+                section = d[key]
+        except Exception as e:
+            print(str(e))
+        return section
+
+
+    def binarySearch(self, array, x, start, end):
+        if start > end:
+            return False
+
+        # Step 1: Find middle element
+        middle = int(start + ((end - start) /2))
+
+        # Check if middle element contains x
+        if array[middle] == x:
+            return True
+            
+        # Slice list based on where x falls in the sorted array (left or right)
+        elif x.lower() < array[middle].lower():
+            return self.binarySearch(array, x, start=start, end=middle-1)
+        else:
+            return self.binarySearch(array, x, start=middle+1, end=end)
+
+
 
     # Compares packages installed on the host with the baseline
     def start(self, packages):
@@ -113,11 +155,17 @@ class Scanner:
                     package_name, package_version = package.strip().split(" ")
                 else:
                     package_name, package_version, package_arch = package.strip().split(" ")
-
+                
                 idx = package_name.strip()[:1].upper()
-                if idx in self.rolodex[self.hostname].keys():
+                
+                # Only proceed if the alphabetic key is present in the rolodex for this hostname
+                section = self.getRolodexSection(key=idx)
+                if section:
+                    keys = list(section["packages"].keys())
+                    keys.sort(key=str.lower)
                     # Package check
-                    if package_name in self.rolodex[self.hostname][idx]["packages"].keys():
+                    #if package_name in self.rolodex[self.hostname][idx]["packages"].keys():
+                    if self.binarySearch(array=keys, x=package_name, start=0, end=len(keys)-1):
                         # Version check
                         if package_version == self.rolodex[self.hostname][idx]["packages"][package_name]["version"]:
                             # Architecture check
@@ -127,7 +175,7 @@ class Scanner:
                             else:
                                 # Architecture invalid
                                 required_arch = self.rolodex[self.hostname][idx]["packages"][package_name]["arch"]
-                                self.arch_mismatch.append("{} {} installed; requires: {}".format(package_name, package_version, required_version))
+                                self.arch_mismatch.append("{} {} installed; requires: {}".format(package_name, package_version, required_arch))
                         else:
                             # Version does not match
                             required_version = self.rolodex[self.hostname][idx]["packages"][package_name]["version"]
@@ -140,8 +188,7 @@ class Scanner:
                     # Rolodex did not include this index
                     self.additional.append("{}.{}.{}".format(package_name, package_version, package_arch))                   
             except Exception as e:
-                #print(package)
-                #print(e)
+                #print(str(e))
                 pass
 
         # DEBUG- Items should be empty if everything matched up with the baseline
@@ -369,7 +416,7 @@ def getPackages(credentials, hostname, ip):
             return ["Failed"]
 
         # Grab output
-        stdin, stdout, stderr = client.exec_command('rpm --queryformat "%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n" -qa | sort -n\n')
+        stdin, stdout, stderr = client.exec_command('rpm --queryformat "%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n" -qa\n')
         packages = stdout.read().decode(encoding='utf-8').split("\n")
 
         '''for idx in range(0, len(packages)-1):
@@ -381,10 +428,10 @@ def getPackages(credentials, hostname, ip):
             md5 = output[-2]
             packages[idx] += " {0}".format(md5)'''
         
-        for idx in range(0, len(packages)-1):
+        '''for idx in range(0, len(packages)-1):
             parts = packages[idx].split(" ")
             package = "{0}-{1}.{2}.rpm".format(parts[0], parts[1], parts[2])
-            packages[idx] += " {0}".format(package)
+            packages[idx] += " {0}".format(package)'''
 
         # Close the SSH connection
         client.close()
