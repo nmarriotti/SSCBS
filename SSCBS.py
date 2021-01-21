@@ -369,7 +369,7 @@ def getPackages(credentials, hostname, ip):
             return ["Failed"]
 
         # Grab output
-        stdin, stdout, stderr = client.exec_command('rpm --queryformat "%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n" -qa\n')
+        stdin, stdout, stderr = client.exec_command('rpm --queryformat "%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n" -qa | sort -n\n')
         packages = stdout.read().decode(encoding='utf-8').split("\n")
 
         '''for idx in range(0, len(packages)-1):
