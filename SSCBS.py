@@ -1,28 +1,22 @@
 #=============================================================================
 # Title: System Software Collector + Baseline Scanner (SSCBS)
-# Version: 1.3
+# Version: 1.3.1
 # Description: Extracts installed packages from Windows/Linux hosts and
-#              compares each package with approved baselines
+#              compares each package with an approved baseline
 # Author: Nick Marriotti
-# Date: 2/11/2020
+# Date: 1/21/2020
 #=============================================================================
 import paramiko, time
 import openpyxl, sys, os
-import re
 from subprocess import check_output
+from modules.scanner import Scanner
 
-
+# Global variables
 configurations = {}
 idx = ""
 saveLocation = os.path.join(os.getcwd(), "Excel Files")
+# Stores config file to use
 configfile = ""
-
-
-def atoi(text):
-    return int(text) if text.isdigit() else text
-
-def natural_keys(text):
-    return [ atoi(c) for c in re.split(r'(\d+)', text) ]
 
 
 # Only prints the banner
@@ -34,256 +28,32 @@ def printTitle():
     print("")
 
 
-class Scanner:
-    def __init__(self, configfile):
-        self.configfile = configfile
-        self.baseline_directory = os.path.join(os.getcwd(), "baselines")
-        self.loaded = False
-        self.rolodex = {}
-        self.baseline_file = ""
-        self.hostname = ""
-        self.load()
-
-        # Used for metric purposes
-        self.additional = []
-        self.missing = []
-        self.version_mismatch = []
-        self.arch_mismatch = []
-    
-    # If a baseline file exists for the current system, load it    
-    def load(self):
-        # Build expected baseline filename
-        self.baseline_file = os.path.join(self.baseline_directory, configfile.replace(".txt",".baseline.xlsx").strip())
-
-        # Does baseline exist in baseline directory?
-        if os.path.basename(self.baseline_file) in os.listdir(self.baseline_directory):
-            #print("Baseline loaded")
-            self.loaded = True
-
-    # Builds a dictionary from baseline packages used to compare with.
-    # packages are distributed into alphabetic keys to speed up search
-    # process and are removed if the current package satisfies baseline
-    # requirements.
-    def build(self):
-        workbook = openpyxl.load_workbook(filename=self.baseline_file)
-        sheetnames = workbook.sheetnames
-        for sheet in sheetnames:
-            # Add each sheet as rolodex key
-            if not sheet in self.rolodex.keys():
-                self.rolodex[sheet] = {}
-                current_sheet = workbook[sheet]
-                # Get each row from baseline
-                for row in current_sheet.iter_rows(values_only=True):
-                    try:
-                        # Package information
-                        package_name = row[0].strip()
-                        package_version = row[1].strip()
-                        package_arch = ""
-
-                        # Architecture only available in Linux 
-                        if not "windows" in self.hostname:
-                            package_arch = row[2].strip()
-
-                        # First letter of package name for rolodex organization
-                        rolodex_index = package_name[:1].upper()
-                        
-                        # DEBUG - Show alphanumeric key package will be stored in
-                        #print("rolodex index: {}".format(rolodex_index))
-
-                        if not rolodex_index in self.rolodex[sheet]:
-                            # Add new alphabetic key 
-                            self.rolodex[sheet][rolodex_index] = {"packages":{}}
-                        # Add each package to its correct letter index
-                        self.rolodex[sheet][rolodex_index]["packages"][package_name] = {"version":package_version, "arch":package_arch}
-                    except Exception as e:
-                        #print(e)
-                        pass
-
-        # DEBUG - Print complete rolodex scanner will use for comparisons
-        #print(self.rolodex["Centos7VM1"]["S"])
-        #sys.exit(1)
-
-    def isLoaded(self):
-        return self.loaded
-
-    def setHostnameAndBuild(self, hostname):
-        self.hostname = hostname
-        self.build()
-
-    
-    # Returns rolodex values stored at the specificed key
-    def getRolodexSection(self, key, d=None):
-        section = False
-        try:
-            if not d:
-                section = self.rolodex[self.hostname][key]
-            else:
-                section = d[key]
-        except Exception as e:
-            print(str(e))
-        return section
-
-
-    def binarySearch(self, array, x, start, end):
-        if start > end:
-            return False
-
-        # Step 1: Find middle element
-        middle = int(start + ((end - start) /2))
-
-        # Check if middle element contains x
-        if array[middle] == x:
-            return True
-            
-        # Slice list based on where x falls in the sorted array (left or right)
-        elif x.lower() < array[middle].lower():
-            return self.binarySearch(array, x, start=start, end=middle-1)
-        else:
-            return self.binarySearch(array, x, start=middle+1, end=end)
-
-
-
-    # Compares packages installed on the host with the baseline
-    def start(self, packages):
-        for package in packages:
-            try:
-                package_name = ""
-                package_version = ""
-                package_arch = ""
-
-                if "windows" in self.hostname:
-                    package_name, package_version = package.strip().split(" ")
-                else:
-                    package_name, package_version, package_arch = package.strip().split(" ")
-                
-                idx = package_name.strip()[:1].upper()
-                
-                # Only proceed if the alphabetic key is present in the rolodex for this hostname
-                section = self.getRolodexSection(key=idx)
-                if section:
-                    keys = list(section["packages"].keys())
-                    keys.sort(key=str.lower)
-                    # Package check
-                    #if package_name in self.rolodex[self.hostname][idx]["packages"].keys():
-                    if self.binarySearch(array=keys, x=package_name, start=0, end=len(keys)-1):
-                        # Version check
-                        if package_version == self.rolodex[self.hostname][idx]["packages"][package_name]["version"]:
-                            # Architecture check
-                            if package_arch == self.rolodex[self.hostname][idx]["packages"][package_name]["arch"]:
-                                # Valid package found, remove from rolodex
-                                del self.rolodex[self.hostname][idx]["packages"][package_name]
-                            else:
-                                # Architecture invalid
-                                required_arch = self.rolodex[self.hostname][idx]["packages"][package_name]["arch"]
-                                self.arch_mismatch.append("{} {} installed; requires: {}".format(package_name, package_version, required_arch))
-                        else:
-                            # Version does not match
-                            required_version = self.rolodex[self.hostname][idx]["packages"][package_name]["version"]
-                            self.version_mismatch.append("{} {} installed; requires: {}".format(package_name, package_version, required_version))
-                    else:
-                        # New package that is not in the baseline
-                        self.additional.append("{}.{}.{}".format(package_name, package_version, package_arch))
-                else:
-                    # New package that is not in the baseline
-                    # Rolodex did not include this index
-                    self.additional.append("{}.{}.{}".format(package_name, package_version, package_arch))                   
-            except Exception as e:
-                #print(str(e))
-                pass
-
-        # DEBUG- Items should be empty if everything matched up with the baseline
-        #print("\nMissing Packages")
-        #print(self.missing)
-        #print("\nAdditional Packages")
-        #print(self.additional)
-        #print("\nVersion Mismatch")
-        #print(self.version_mismatch)
-        #print("\nArch Mismatch")
-        #print(self.arch_mismatch)
-        #print("")
-        #print(self.rolodex)
-        #print("")
-
-        # Display findings to the user
-        self.results()
-
-        # Reset
-        self.__init__(self.configfile)
-
-
-
-    # Count the number of packages remaining in the rolodex
-    def calculate_remaining_packages(self):
-        i = 0
-        for ascii in range(65, 90):
-            try:
-                idx = str(chr(ascii))
-                for key, value in self.rolodex[hostname][idx]["packages"].items():
-                    if key:
-                        i += 1
-                        #print("Missing: {}".format(key))
-                        self.missing.append("[{}, {}. {}]".format(key, value["version"], value["arch"]))
-            except Exception as e:
-                return i
-        return i
-
-
-
-    # Display results to the user
-    def results(self):
-        num_additional = len(self.additional)
-        num_version = len(self.version_mismatch)
-        num_arch = len(self.arch_mismatch)
-        num_missing = int(self.calculate_remaining_packages())
-
-        if num_missing > 0:
-            print("\t\t\033[1;31;40mMissing Packages:")
-            for package in self.missing:
-                print("\t\t\t{}".format(package))
-
-        if num_additional > 0:
-            print("\t\t\033[1;31;40mAdditional Packages:")
-            for package in self.additional:
-                print("\t\t\t{}".format(package))
-
-        if num_version > 0:
-            print("\t\t\033[1;31;40mVersion Mismatch:")
-            for package in self.version_mismatch:
-                print("\t\t\t{}".format(package))
-
-        if num_arch > 0:
-            print("\t\t\033[1;31;40mArch Mismatch:")
-            for package in self.arch_mismatch:
-                print("\t\t\t{}".format(package))
-
-
-
-# Populate menu of all files in config directory
 def display_available_systems():
+    ''' Prints a numbered menu of all files in the config directory '''
     global configurations
     configurations = {}
+    # Build an absolute path to config directory
     path = os.path.join(os.getcwd(), "config")
+    # Counter
     i = 1
+    # Assign files to the configurations dict
     for file in os.listdir(path):
         if not file == "README":
             configurations[str(i)] = str(file)
             i += 1
     if len(configurations) > 0:
+        # Print config files 
         for key, value in configurations.items():
             print("       {}. {}".format(key, value))
         return True
     else:
         return False
 
-
         
 # Ask user to select a config file            
-def setTarget():
-    global idx
+def chooseConfigFile():
     target = input("\n    Selection (1-{}) => ".format(len(configurations)))
-    idx = str(target)
-    return idx
-
+    return str(target)
 
 
 # Menu to prompt for config file
@@ -300,7 +70,11 @@ def display_menu():
     # Compare selection with available options
     global idx
     global configurations
-    if not setTarget() in configurations.keys():
+
+    # Config file user wants to load
+    idx = chooseConfigFile()
+
+    if not idx in configurations.keys():
         # User selected an invalid option
         return "Invalid"
 
@@ -308,9 +82,17 @@ def display_menu():
     return configurations[idx]
 
  
-
 # Process the config file
 def load_answer_file(f):
+    ''' 
+    DESCRIPTION:
+        Extact host information from the select config file
+    PARAMS:
+        f = config file
+    RETURN:
+        credentials
+        Host IPs
+    '''
     hosts = {}
     credentials = {}
     _hosts = False
@@ -353,9 +135,14 @@ def load_answer_file(f):
         exit(1)
 
 
-
 # Append the Windows IP to the Powershell answerfile
 def addIpToAnswerFile(ip):
+    ''' 
+    DESCRIPTION:
+        Writes Windows host information to the windows answer file
+    PARAMS:
+        ip = IP address of Windows host
+    '''
     replaceIp = False
     answerfile = open('windows//answerfile.txt', 'r')
     data = answerfile.readlines()
@@ -382,9 +169,16 @@ def addIpToAnswerFile(ip):
     answerfile.close()
 
 
-
 # Add file extension if missing, or use default filename
 def fixFilename(filename):
+    ''' 
+    DESCRIPTION:
+        Adds a .xlsx extension to the output filename if missing
+    PARAMS:
+        filename = Output filename
+    RETURN:
+        string : Absolute path to output file with .xlsx extension
+    '''
     if filename == "":
         return os.path.join(saveLocation, "output.xlsx")
     if "." in filename:
@@ -398,9 +192,18 @@ def fixFilename(filename):
         return os.path.join(saveLocation, "{}{}".format(filename, ".xlsx"))
 
 
-
 # Connect to each host and collect RPM package listing    
 def getPackages(credentials, hostname, ip):
+    ''' 
+    DESCRIPTION:
+        Connects to host and extracts a list of installed packages
+    PARAMS:
+        credentials = username and password of host
+        hostname = hostname of the host
+        ip = IP address of host
+    RETURN:
+        list of installed packages
+    '''
     sys.stdout.write("\033[1;32;40m       {} => ".format(hostname))
     sys.stdout.flush()
 
@@ -419,20 +222,6 @@ def getPackages(credentials, hostname, ip):
         stdin, stdout, stderr = client.exec_command('rpm --queryformat "%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n" -qa\n')
         packages = stdout.read().decode(encoding='utf-8').split("\n")
 
-        '''for idx in range(0, len(packages)-1):
-            parts = packages[idx].split(" ")
-            package = "{0}-{1}.{2}.rpm".format(parts[0], parts[1], parts[2])
-            file_download = "{0}-{1}".format(parts[0], parts[1])
-            stdin, stdout, stderr = client.exec_command("echo '{0}' | sudo -S yum reinstall --downloadonly --downloadonly --downloaddir=. {1} && md5sum {2} && rm -f {2}".format(credentials['linux_password'], file_download, package), get_pty=True)
-            output = stdout.read().decode(encoding='utf-8').split("\n")
-            md5 = output[-2]
-            packages[idx] += " {0}".format(md5)'''
-        
-        '''for idx in range(0, len(packages)-1):
-            parts = packages[idx].split(" ")
-            package = "{0}-{1}.{2}.rpm".format(parts[0], parts[1], parts[2])
-            packages[idx] += " {0}".format(package)'''
-
         # Close the SSH connection
         client.close()
 
@@ -440,7 +229,6 @@ def getPackages(credentials, hostname, ip):
 
         # Return installed packages
         return packages[0:len(packages)-1]
-
 
     # WINDOWS
     # Requires Windows Remote Management (WinRM) to be enabled and properly configured
@@ -457,8 +245,17 @@ def getPackages(credentials, hostname, ip):
             return packages[0:len(packages)-1]
 
 
-# Returns list of necessary columns (A1, A2, A3, etc...)
+# Returns list of necessary columns (A1, B1, C1, etc...)
 def getColumns(length, row):
+    ''' 
+    DESCRIPTION:
+        Determines number of columns needed to write data to Excel workbook
+    PARAMS:
+        length = number of cells to write a a given row
+        row = Number of row
+    RETURN:
+        list of Excel row/column identifiers
+    '''
     columns = []
     for ascii in range(97, 97 + length):
         letter = chr(ascii).upper()
@@ -467,9 +264,9 @@ def getColumns(length, row):
     return columns
 
 
-
 # Start here
 while True:
+    # Prmopt user to select a configuration file
     configfile = display_menu()
 
     # Restart if invalid config file selected
@@ -515,12 +312,11 @@ while True:
         
         # Format each package to be written to xlsx
         for package in packages:
-
+            # Create list from package string
             package = package.split(" ")
-            length = len(package)
 
             # Get columns
-            columns = getColumns(length, row)
+            columns = getColumns(len(package), row)
 
             # Go to next row
             row += 1
