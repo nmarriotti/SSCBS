@@ -1,0 +1,12 @@
+[credentials]
+# Account used to access hosts
+linux_username=yourusername
+linux_password=yourusername
+windows_username=yourusername
+windows_password=yourusername
+
+[hosts]
+# Add hosts by specifying hostname=ip
+# Prepend windows_ to all Windows hosts
+ansible=1.1.1.1
+windows_host1=2.2.2.2

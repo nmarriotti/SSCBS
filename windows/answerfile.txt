@@ -1,2 +1,3 @@
-username=
-password=
+username=yourusername
+password=yourusername
+ComputerName=2.2.2.2
