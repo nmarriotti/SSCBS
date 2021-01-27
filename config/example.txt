@@ -1,11 +1,11 @@
 [credentials]
 # Account used to access hosts
 linux_username=ansible
-linux_password=secretpassword
+linux_password=Nmarr_18_iotti$$
 windows_username=
 windows_password=
 
 [hosts]
 # Add hosts by specifying hostname=ip
 # Prepend windows_ to all Windows hosts
-ansible=192.168.1.15
+ansible=192.168.1.23
